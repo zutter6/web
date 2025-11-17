@@ -34,7 +34,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ellinalopez/cloud-studio:latest
+          tags: butterfly188/web:latest
           build-args: |
             CAMOUFOX_URL=${{ env.CAMOUFOX_URL }}
           # 缓存功能现在可以正常工作了
