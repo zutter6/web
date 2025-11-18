@@ -1930,15 +1930,17 @@ class ApplicationCore extends EventEmitter {
   }
 
   // [伪装] 路由、日志、HTML文本修改
-   _createExpressApp() {
+  _createExpressApp() {
     const app = express();
+    app.set('trust proxy', 1); // [关键修复] 信任代理服务器，这是解决登录循环问题的核心！
+
     app.use((req, res, next) => {
       if (
         req.path !== "/api/status" &&
         req.path !== "/" &&
         req.path !== "/favicon.ico" &&
         req.path !== "/login" &&
-        req.path !== "/logout" // [新增] 忽略登出日志
+        req.path !== "/logout"
       ) {
         this.logger.info(
           `[Entrypoint] 收到一个任务: ${req.method} ${req.path}`
@@ -1958,7 +1960,10 @@ class ApplicationCore extends EventEmitter {
         secret: sessionSecret,
         resave: false,
         saveUninitialized: true,
-        cookie: { secure: false, maxAge: 86400000 }, // 注意：在生产环境中如果使用HTTPS，应设为true
+        cookie: { 
+            secure: 'auto', // [优化] 让 express-session 自动判断
+            maxAge: 86400000 
+        },
       })
     );
 
@@ -1972,7 +1977,6 @@ class ApplicationCore extends EventEmitter {
 
     // 登录页面
     app.get("/login", (req, res) => {
-      // [优化] 如果已经登录，直接跳转到状态页
       if (req.session.isAuthenticated) {
         return res.redirect("/status");
       }
@@ -1992,14 +1996,13 @@ class ApplicationCore extends EventEmitter {
       const { apiKey } = req.body;
       if (apiKey && this.config.apiKeys.includes(apiKey)) {
         req.session.isAuthenticated = true;
-        // [修复] 登录成功后重定向到状态/操作页面
         res.redirect("/status");
       } else {
         res.redirect("/login?error=1");
       }
     });
 
-    // [新增] 登出功能
+    // 登出功能
     app.get("/logout", (req, res) => {
         req.session.destroy(err => {
             if(err) {
@@ -2012,7 +2015,6 @@ class ApplicationCore extends EventEmitter {
     
     // 根路径路由
     app.get("/", (req, res) => {
-        // [修复] 如果已登录，直接访问状态页，否则显示首页
         if (req.session.isAuthenticated) {
             return res.redirect('/status');
         }
@@ -2041,7 +2043,7 @@ class ApplicationCore extends EventEmitter {
         .join("\n");
 
       const accountOptionsHtml = availableIndices
-        .map((index) => `<option value="${index}">账号 #${index}</option>`)
+        .map((index) => `<option value="${index}" ${index === requestHandler.currentAuthIndex ? 'selected' : ''}>账号 #${index}</option>`)
         .join("");
 
       const statusHtml = `
@@ -2149,7 +2151,14 @@ class ApplicationCore extends EventEmitter {
         </div>
         <script>
         function updateContent() {
-            fetch('/api/status').then(response => response.json()).then(data => {
+            fetch('/api/status').then(response => {
+                if (response.redirected) {
+                    window.location.href = response.url;
+                    return;
+                }
+                return response.json();
+            }).then(data => {
+                if (!data) return;
                 const statusPre = document.querySelector('#status-section pre');
                 const accountDetailsHtml = data.status.accountDetails.map(acc => {
                   return '<span class="label" style="padding-left: 20px;">账号' + acc.index + '</span>: ' + acc.name;
@@ -2175,6 +2184,9 @@ class ApplicationCore extends EventEmitter {
                 logTitle.innerText = \`实时日志 (最近 \${data.logCount} 条)\`;
                 logContainer.innerText = data.logs;
                 if (isScrolledToBottom) { logContainer.scrollTop = logContainer.scrollHeight; }
+
+                const select = document.getElementById('accountIndexSelect');
+                if (select) select.value = data.status.currentAuthIndex;
             }).catch(error => console.error('Error fetching new content:', error));
         }
         function switchSpecificAccount() {
@@ -2279,7 +2291,6 @@ class ApplicationCore extends EventEmitter {
             res.status(400).send(result.reason);
           }
         } else {
-          // Fallback for old button, though it's removed from UI
            this.logger.info("[WebUI] 收到手动切换下一个账号的请求...");
             if (this.authSource.availableIndices.length <= 1) {
                 return res.status(400).send("切换操作已取消：只有一个可用账号，无法切换。");
@@ -2299,6 +2310,7 @@ class ApplicationCore extends EventEmitter {
           .send(`致命错误：操作失败！请检查日志。错误: ${error.message}`);
       }
     });
+
     app.post("/api/set-mode", isAuthenticated, (req, res) => {
       const newMode = req.body.mode;
       if (newMode === "fake" || newMode === "real") {
