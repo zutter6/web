@@ -2358,7 +2358,7 @@ class ApplicationCore extends EventEmitter {
 
     return app;
   }
-}
+
 
   async _startWebSocketServer() {
     this.wsServer = new WebSocket.Server({
